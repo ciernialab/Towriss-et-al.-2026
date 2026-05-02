@@ -1,0 +1,1150 @@
+---
+title: "hIBD hypothalamus steroid sac adults June 2025"
+author: "Annie Ciernia"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Analysis of microglia morphlogy from brains taken 24hrs after last RGFP/LPS injection
+
+#Iba1 staining in both male and female mice used #C57Bl6J background
+
+```{r load libraries}
+
+library(cowplot)
+library(stringr)
+library(ggplot2)
+library(tidyverse)
+library(plotrix)
+library(rstatix)
+library(ggpubr)
+library(nlme)
+library(emmeans)
+
+library(MicrogliaMorphologyR)
+library(factoextra)
+library(ppclust)
+set.seed(1)
+
+```
+
+feb 21, 2025
+
+```{r Load all data HC}
+
+setwd("/Users/aciernia/Sync/CierniaLabMembers/AnnieCiernia/Experiments/SCFA_Invivo2025/morphology_all")
+fraclac.dir <- "/Volumes/NINC/CierniaLab/Clianta/SCFA4/SCFA4\ Microglia\ Morphology/FracLac/20250804084752"
+skeleton.dir <- "/Volumes/NINC/CierniaLab/Clianta/SCFA4/SCFA4\ Microglia\ Morphology/SkeletonResults"
+
+
+# these steps may be very time-intensive, depending on how many cells you are analyzing (i.e., on the order of 1000s of cells). 
+fraclac <- fraclac_tidying(fraclac.dir) 
+skeleton <- skeleton_tidying(skeleton.dir)
+
+save(fraclac, skeleton, file = "tmp_InputData.Rdata")
+
+#fix mouse 3 names
+#skeleton$Name <- gsub(" mouse3_","mouse3_",skeleton$Name)
+
+#check names match
+     
+skeleton <- skeleton %>% distinct()
+data <- merge_data(fraclac, skeleton)
+finaldata_nonHC <- metadata_columns(data, c("MouseID","Sex","Region", "Antibody","Cohort","Subregion"), sep="_")
+
+#read in metadata
+metadata <- read.csv("SCFA4_metadata_final.csv")
+
+# Extract the last number
+metadata$cohort <- str_extract(metadata$Cohort, "\\d+(?!.*\\d)")
+
+metadata$Sex <- toupper(metadata$Sex)
+  
+metadata$MouseID <- paste("Mouse",metadata$ID,metadata$Sex, metadata$cohort, sep="")
+
+#fix to include sex and cohort
+finaldata_nonHC$MouseID <- paste(finaldata_nonHC$MouseID, finaldata_nonHC$Sex, sep="")
+
+
+metadata$MouseID %in% unique(finaldata_nonHC$MouseID)
+unique(finaldata_nonHC$MouseID) %in% metadata$MouseID
+
+missing_ids <- metadata$MouseID[!(metadata$MouseID %in% unique(finaldata_nonHC$MouseID))]
+
+#mouse9M2 is missing
+
+finaldata_nonHC <- merge(metadata, finaldata_nonHC, by="MouseID")
+finaldata_nonHC <- distinct(finaldata_nonHC)
+
+
+
+save(finaldata_nonHC, file = "nonHC_InputData_tmp.Rdata")
+
+
+
+```
+
+
+
+```{r}
+#read in HC datat
+
+load("/Users/aciernia/Sync/CierniaLabMembers/AnnieCiernia/Experiments/SCFA_Invivo2025/morphology_all/HC_InputData.Rdata")
+
+
+skeleton <- skeleton %>% distinct()
+data <- merge_data(fraclac, skeleton)
+finaldata_HC <- metadata_columns(data, c("MouseID","Sex","Region", "Antibody","Cohort","Subregion"), sep="_")
+
+#read in metadata
+metadata <- read.csv("SCFA4_metadata_final.csv")
+
+# Extract the last number
+metadata$cohort <- str_extract(metadata$Cohort, "\\d+(?!.*\\d)")
+
+metadata$Sex <- toupper(metadata$Sex)
+
+metadata$MouseID <- paste("Mouse",metadata$ID,metadata$Sex, metadata$cohort, sep="")
+
+#fix to include sex and cohort
+finaldata_HC$MouseID <- paste(finaldata_HC$MouseID, finaldata_HC$Sex, sep="")
+
+
+metadata$MouseID %in% unique(finaldata_HC$MouseID)
+unique(finaldata_HC$MouseID) %in% metadata$MouseID
+
+missing_ids <- metadata$MouseID[!(metadata$MouseID %in% unique(finaldata_HC$MouseID))]
+
+finaldata_HC <- merge(metadata, finaldata_HC, by="MouseID")
+finaldata_HC <- distinct(finaldata_HC)
+
+
+
+save(finaldata_HC, file = "HC_InputData.Rdata")
+
+
+
+```
+
+
+```{r}
+#combine datasets
+
+
+finaldata_all <- rbind(finaldata_HC, finaldata_nonHC)
+
+
+unique(finaldata_all$Sex.x)
+
+unique(finaldata_all$Condition)
+
+unique(finaldata_all$Injection)
+
+unique(finaldata_all$Cohort.x)
+
+
+unique(finaldata_all$Region)
+
+unique(finaldata_all$Subregion)
+
+
+#replace values in region with subregion for DH
+
+finaldata_all <- finaldata_all %>%
+  mutate(Region = ifelse(Region == "DH", Subregion, Region))
+
+unique(finaldata_all$Region)
+
+```
+
+
+
+
+```{r gather data and normalize}
+# gather your numerical morphology data into one column ('measure') which contains the feature name, and another column ('value') which contains measured values
+
+
+#print(finaldata)
+
+# transform your data in appropriate manner for downstream analyses
+data_logtransformed <- transform_log(finaldata_all, 1, start=23, end=ncol(finaldata_all)) 
+
+```
+
+
+
+```{r}
+
+
+library(dplyr)
+
+# Step 1: Apply IQR filter (use your updated IQR logic)
+cols_to_check <- 23:49
+outlier_indices <- list()
+
+for (col in cols_to_check) {
+  x <- data_logtransformed[[col]]
+  
+  # Skip non-numeric
+  if (!is.numeric(x)) next
+
+  Q1 <- quantile(x, 0.25, na.rm = TRUE)
+  Q3 <- quantile(x, 0.75, na.rm = TRUE)
+  IQR_val <- Q3 - Q1
+
+  lower_bound <- Q1 - 3 * IQR_val  # use 3.5 for leniency
+  upper_bound <- Q3 + 3 * IQR_val
+
+  outlier_indices[[col]] <- which(x < lower_bound | x > upper_bound)
+}
+
+# Combine and filter
+all_outliers <- unique(unlist(outlier_indices))
+df_filtered <- data_logtransformed[-all_outliers, ]
+
+# Step 2: Safely coerce columns 7:33 to numeric
+df_filtered[, 23:49] <- df_filtered[,23:49] %>%
+  mutate(across(everything(), ~ suppressWarnings(as.numeric(as.character(.)))))
+
+dim(df_filtered)
+
+```
+
+```{r}
+
+
+constant_cols <- which(apply(df_filtered[,c(23:49)], 2, function(x) var(x, na.rm = TRUE) == 0))
+names(df_filtered)[constant_cols]
+
+unique(data_logtransformed$`# of junctions`)
+unique(df_filtered$`# of junctions`)
+
+
+# Step 1: Split metadata and numeric features
+metadata <- df_filtered[, 1:23]
+features <- df_filtered[, 24:ncol(df_filtered)]
+
+# Step 2: Clean feature columns
+features_clean <- features %>%
+  dplyr::select(where(is.numeric)) %>%
+  dplyr::select_if(~ var(., na.rm = TRUE) != 0) %>%
+  mutate(across(everything(), ~ ifelse(is.finite(.), ., NA))) %>%
+  na.omit()
+
+# Step 3: Match metadata rows (only those that survived na.omit)
+metadata_clean <- metadata[rownames(features_clean), ]
+
+# Step 4: Combine cleaned metadata + features
+clean_data <- cbind(metadata_clean, features_clean)
+
+dim(clean_data)
+
+```
+
+
+
+```{r counts}
+
+
+
+#save table of number of cells/mouse/subregion
+t <- table(clean_data$Region, clean_data$MouseID)
+t
+
+#CA2 not enough cells. remove
+#mouse 11F2 has very few cells. remove.
+
+clean_data <- clean_data %>% filter(Region != "CA2") 
+
+
+write.csv(t, "Microglia_PerMousePersubregion.csv")
+
+
+samples <- clean_data  %>% ungroup() %>% select(1:24) %>% unique()
+t <- table(samples$Region, samples$Condition, samples$Injection, samples$Sex.x)
+t
+write.csv(t, "Mice_per_subregion_condition.csv")
+
+
+```
+
+
+## clustering analysis
+
+#Kmeans (no filtering)
+
+```{r PCA and kmeans clustering}
+
+
+#feature map
+pdf("featurecorrelations.pdf", width=10, height=10)
+
+featurecorrelations(clean_data, featurestart=23, featureend=49, rthresh=0.8, pthresh=0.05, title="Correlations across log transformed features")
+dev.off()
+
+#featurecorrelations(data_2xLPS_logtransformed, start=15, end=ncol(finaldata2), rthresh=0.8, pthresh=0.05, title="Correlations across log transformed features")
+
+#remove cells with area value missing b/c outliler
+#data_logtransformed <- na.omit(data_logtransformed)
+
+
+
+#pca
+pdf("Elbowplot.pdf", width=6, height=4)
+pcadata_elbow(clean_data , featurestart=23, featureend=ncol(clean_data ))
+dev.off()
+
+pca_data <- pcadata(clean_data ,featurestart=23, featureend=ncol(clean_data),
+                    pc.start=1, pc.end=10)
+
+head(pca_data)
+
+```
+
+```{r feature correlations by PC}
+
+pdf("PCcorrelations.pdf", width=6, height=4)
+
+pcfeaturecorrelations(pca_data, pc.start=1, pc.end=3, 
+                      feature.start=33, feature.end=ncol(pca_data), 
+                      rthresh=0.75, pthresh=0.05, 
+                      title="Correlation between PCs and features")
+
+dev.off()
+
+```
+
+
+
+
+```{r cluster number}
+## for k-means clustering: scale PCs 1-3, which together describe ~85% of variability
+pca_data_scale <- transform_scale(pca_data, start=1, end=3) 
+
+# scale pca data as input for k-means clustering
+kmeans_input <- pca_data_scale[1:3]
+
+# check for optimal number of clusters using wss and silhouette methods
+sampling <- kmeans_input[sample(nrow(kmeans_input), 2000),] #sample 5000 random rows for cluster optimization
+
+pdf("nbclust.pdf", width=6, height=4)
+
+fviz_nbclust(sampling, kmeans, method = 'wss', nstart=25, iter.max=50) # 4 clusters
+
+dev.off()
+
+
+pdf("silhouette.pdf", width=6, height=4)
+
+fviz_nbclust(sampling, kmeans, method = 'silhouette', nstart=25, iter.max=50)
+dev.off()
+
+```
+
+
+
+
+```{r}
+# cluster and combine with original data
+data_kmeans <- kmeans(kmeans_input, centers=4)
+data_kmeans
+
+pca_kmeans <- cbind(pca_data[1:3], clean_data, as.data.frame(data_kmeans$cluster))
+
+colnames(pca_kmeans)
+
+colnames(pca_kmeans)[53] <- c("Cluster")
+
+#str(pca_kmeans)
+
+plot <- clusterplots(pca_kmeans, "PC1", "PC2")
+plot
+
+pdf("clusterplot.pdf", width=6, height=4)
+
+plot + scale_colour_viridis_d()
+
+dev.off()
+
+```
+
+
+```{r}
+library(plotly)
+library(htmlwidgets)
+
+
+# Ensure Cluster is a factor for discrete coloring
+pca_kmeans$Cluster <- as.factor(pca_kmeans$Cluster)
+
+# Choose a manual color palette (can be any valid R color names or hex codes)
+cluster_colors <- RColorBrewer::brewer.pal(n = length(unique(pca_kmeans$Cluster)), name = "Set2")
+
+# Plot with manual colors
+fig <- plot_ly(
+  data = pca_kmeans,
+  x = ~PC1,
+  y = ~PC2,
+  z = ~PC3,
+  color = ~Cluster,
+  colors = cluster_colors,  # use discrete palette
+  type = "scatter3d",
+  mode = "markers",
+  marker = list(size = 5, opacity = 0.8)
+)
+
+# Save as HTML file
+saveWidget(fig, file = "3D_PCA_plot.html", selfcontained = TRUE)
+
+
+
+
+```
+
+
+
+
+```{r}
+
+pdf("clusterheatmap_numbers.pdf", width=6, height=4)
+clusterfeatures(pca_kmeans, featurestart=26, featureend =52)
+dev.off()
+
+clusterfeatures(pca_kmeans, featurestart=26, featureend =52)
+
+
+```
+
+
+
+#manually label
+
+```{r}
+
+# update cluster labels after looking at color by cluster
+data_pca_kmeans  <- pca_kmeans %>% mutate(Cluster = 
+                      case_when(Cluster=="1" ~ "ramified",
+                                Cluster=="2" ~ "ameboid",
+                                Cluster=="3" ~ "rod-like",
+                                Cluster=="4" ~ "hypertrophic"))
+
+pdf("clusterheatmap_names.pdf", width=6, height=4)
+
+clusterfeatures(data_pca_kmeans,featurestart=26, featureend =52)
+
+dev.off()
+
+
+save(data_kmeans, kmeans_input, pca_data, pca_kmeans, pca_data_scale, file= "Data_clusterdata.RData")
+
+clusterfeatures(data_pca_kmeans,featurestart=26, featureend =52)
+
+
+```
+
+```{r plots by whole HC}
+# Quick check of cluster proportions when considering experimental variables of interest
+
+cp2 <- clusterpercentage(pca_kmeans, "Cluster", MouseID, Region, Sex.x, Condition, Injection)
+
+
+cp2 <- cp2  %>%  mutate(Cluster = 
+                           case_when(Cluster=="1" ~ "ramified",
+                                Cluster=="2" ~ "ameboid",
+                                Cluster=="3" ~ "rod-like",
+                                Cluster=="4" ~ "hypertrophic"))
+
+
+cp2$Condition <- factor(cp2$Condition, levels = c("Saline","Butyrate"  ,  "Propionate", "Acetate"))
+
+cp2$Injection <- factor(cp2$Injection, levels= c("PBS","LPS"))
+
+cp2$Region <- factor(cp2$Region, levels= c("CA1" ,"CA3", "DG","PFC","CC" , "CP"))
+
+
+library(lemon)
+library(cowplot)
+
+pdf("Boplot_subregion_SCFA_Sex_Cluster.pdf", height = 40, width =16)    # create PNG for the heat map       
+
+cbPalette <- c("#0072B2", "#E69F00", "#009E73", "#CC79A7")
+p <- cp2 %>%
+  ggplot(aes(x = Cluster, y = percentage * 100, fill = Injection)) +
+  facet_rep_wrap(~ Region * Sex.x *Condition, repeat.tick.labels = 'bottom', ncol = 4) +
+  
+  stat_summary(
+    geom = "boxplot",
+    fun.data = function(x) setNames(quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)),
+                                    c("ymin", "lower", "middle", "upper", "ymax")),
+    position = position_dodge(width = 0.9)
+  ) +
+
+  geom_point(aes(group = Injection),
+             position = position_dodge(width = 0.9),
+             shape = 21, size = 2, alpha = 0.7, stroke = 0.3) +
+
+  scale_fill_manual(values = cbPalette) +
+  scale_x_discrete(name = "Cluster") +
+  scale_y_continuous(name = "Percentage") +
+  ggtitle("K-means clusters") +
+  theme_cowplot(font_size = 15) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p
+
+dev.off();
+
+write.csv(cp2,"Mean_Cluster_data.csv")
+
+pdf("Boplot_subregion_SCFA_Injection_Cluster.pdf", height = 30, width =16)    # create PNG for the heat map       
+
+cbPalette <- c("#0072B2", "#E69F00", "#009E73", "#CC79A7")
+p <- cp2 %>%
+  ggplot(aes(x = Cluster, y = percentage * 100, fill = Condition)) +
+  facet_rep_wrap(~ Region * Sex.x *Injection, repeat.tick.labels = 'bottom', ncol = 4) +
+  
+  stat_summary(
+    geom = "boxplot",
+    fun.data = function(x) setNames(quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)),
+                                    c("ymin", "lower", "middle", "upper", "ymax")),
+    position = position_dodge(width = 0.9)
+  ) +
+
+  geom_point(aes(group = Condition),
+             position = position_dodge(width = 0.9),
+             shape = 21, size = 2, alpha = 0.7, stroke = 0.3) +
+
+  scale_fill_manual(values = cbPalette) +
+  scale_x_discrete(name = "Cluster") +
+  scale_y_continuous(name = "Percentage") +
+  ggtitle("K-means clusters") +
+  theme_cowplot(font_size = 15) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p
+
+dev.off();
+
+
+p
+```
+
+
+
+```{r stats analysis for HYP}
+
+# prepare percentages dataset for downstream analysis
+stats.input <- cp2
+stats.input$Sex <- factor(stats.input$Sex.x)
+stats.input$Cluster <- factor(stats.input$Cluster)
+stats.input$Subregion <- factor(stats.input$Region)
+table(is.na(stats.input))
+
+
+
+```
+
+
+```{r}
+#loop for each region
+
+# Get unique subregions
+subregions <- unique(stats.input$Subregion)
+
+#CC throws an error
+subregions <- c("CA1" ,"CA3", "DG","PFC","CP")
+
+
+  
+  
+# Initialize lists to store results
+all_anovas <- list()
+all_posthoc1 <- list()
+all_posthoc2 <- list()
+
+# Loop over each subregion
+for (region in subregions) {
+  
+  # Subset data
+  stats_sub <- stats.input[stats.input$Subregion == region, ]
+  
+  # Run stats model
+  stats.testing <- stats_cluster.animal(
+    stats_sub,
+    "percentage ~ Cluster*Condition*Injection*Sex + (1|MouseID)",  # no 'subregion' term
+    "~Condition|Injection|Cluster*Sex", 
+    "~Injection|Condition|Cluster*Sex", 
+    "sidak"
+  )
+  
+  # Extract and store ANOVA
+  anova <- stats.testing[[1]]
+  all_anovas[[region]] <- anova
+ # write.csv(anova, paste0("ANOVA_", region, "_kmeansclusters.csv"))
+  
+  # Extract and store posthoc1
+  posthoc1 <- stats.testing[[2]]
+  posthoc1$correction <- "sidak"
+  all_posthoc1[[region]] <- posthoc1
+ # write.csv(posthoc1, paste0("Posthoc1_", region, "_Sidak_kmeansclusters.csv"))
+  
+  # Extract and store posthoc2
+  posthoc2 <- stats.testing[[3]]
+  posthoc2$correction <- "sidak"
+  all_posthoc2[[region]] <- posthoc2
+ # write.csv(posthoc2, paste0("Posthoc2_", region, "_Sidak_kmeansclusters.csv"))
+}
+
+# Optional: combine and export all results into one table each
+combined_anova <- dplyr::bind_rows(all_anovas, .id = "Subregion")
+combined_posthoc1 <- dplyr::bind_rows(all_posthoc1, .id = "Subregion")
+combined_posthoc2 <- dplyr::bind_rows(all_posthoc2, .id = "Subregion")
+
+
+#add significance column
+combined_anova <- combined_anova  %>%
+  mutate(Significance = ifelse(`Pr(>Chisq)` < 0.05, "significant", "ns"))
+
+
+# Save combined files
+write.csv(combined_anova, "Combined_ANOVA_AllSubregions.csv")
+write.csv(combined_posthoc1, "Combined_Posthoc1_Sidak_AllSubregions.csv")
+write.csv(combined_posthoc2, "Combined_Posthoc2_Sidak_AllSubregions.csv")
+
+
+
+```
+
+
+```{r}
+# Required libraries
+library(ggplot2)
+library(tibble)
+
+# Create a data frame for the legend
+legend_df <- tibble::tibble(
+  Cluster = factor(c("Cluster 1", "Cluster 2", "Cluster 3", "Cluster 4"),
+                   levels = c("Cluster 1", "Cluster 2", "Cluster 3", "Cluster 4")),
+  Color = c("#BBCC33", "#44BB99", "#EEDD88", "#EE8866"),
+  Label = c("Cluster 1: ramified", 
+            "Cluster 2: ameboid", 
+            "Cluster 3: rod-like", 
+            "Cluster 4: hypertrophic")
+)
+
+
+
+pdf("Boplot_legend.pdf", height = 6, width =8)    # create PNG for the heat map       
+
+ggplot(legend_df, aes(x = Cluster, y = 1, fill = Cluster)) +
+  geom_tile(color = "black") +
+  scale_fill_manual(values = legend_df$Color) +
+  theme_void() +
+  theme(legend.position = "none") +
+  geom_text(aes(label = Label), color = "black", hjust = 0.5, vjust = 0.5, size = 5) +
+  coord_fixed(ratio = 0.2) +
+  ggtitle("Microglial Morphology Clusters Legend") +
+  theme(plot.title = element_text(hjust = 0.5, size = 12))
+
+dev.off()
+
+```
+
+
+```{r color by cluster kmeans clusters}
+###############################################################################
+#rcolor by cluster
+################################################################################
+
+
+animals <- unique(as.character(stats.input$MouseID))
+
+#no CA2
+subregions <- c("CA1" ,"CA3", "DG","PFC","CP")
+
+#for each subsubregion and mouse
+for (a in animals) {
+
+#filter for each subsubregion
+# isolate out all the cells for your specific image of interest
+for (s in subregions) {
+  
+  colorbycluster <- pca_kmeans %>%
+  filter(MouseID == a,  Region == s) 
+    
+   colorbycluster$filename <- sub("_[^_]*$", "", colorbycluster$UniqueID)
+    filename <- unique(colorbycluster$filename)
+    
+   colorbycluster <- colorbycluster %>% select(c(Cluster, ID.y))
+
+  colnames(colorbycluster) <- c("Cluster","ID")
+  
+  write.csv(colorbycluster, file= paste(filename,".csv",sep=""))
+  
+}
+
+}
+
+save.image(file="AllsubregionsAnalysis2025.RData")
+
+```
+
+
+
+```{r}
+samples <- clean_data  %>% ungroup() %>% select(1:24) %>% unique() %>% 
+  filter(Region != "CC") %>% 
+  filter(Region != "CA2")
+
+
+t <- table(samples$Region, samples$Condition, samples$Injection, samples$Sex.x)
+t
+write.csv(t, "Mice_per_subregion_condition.csv")
+
+
+samples <- clean_data  %>% ungroup() %>% select(1:17) %>% unique() %>% 
+  filter(Region != "CC") %>% 
+  filter(Region != "CA2")
+
+
+t <- table(samples$Region, samples$Condition, samples$Injection, samples$Sex.x)
+t
+
+```
+
+
+```{r}
+#graph without LPS
+# Quick check of cluster proportions when considering experimental variables of interest
+
+cp2 <- clusterpercentage(pca_kmeans, "Cluster", MouseID, Region, Sex.x, Condition, Injection)
+
+
+cp2 <- cp2  %>%  mutate(Cluster = 
+                           case_when(Cluster=="1" ~ "ramified",
+                                Cluster=="2" ~ "ameboid",
+                                Cluster=="3" ~ "rod-like",
+                                Cluster=="4" ~ "hypertrophic"))
+
+
+cp2$Condition <- factor(cp2$Condition, levels = c("Saline","Butyrate"  ,  "Propionate", "Acetate"))
+
+cp2 <- cp2 %>% filter(Injection == "PBS")
+
+cp2$Region <- factor(cp2$Region, levels= c("CA1" ,"CA3", "DG","PFC","CC" , "CP"))
+
+
+library(lemon)
+library(cowplot)
+
+pdf("Boplot_subregion_SCFA_Sex_Cluster_noLPS.pdf", height =8, width =12)    # create PNG for the heat map       
+
+cbPalette <- c("#0072B2", "#E69F00", "#009E73", "#CC79A7", "pink","skyblue" )
+
+p <- cp2 %>%
+  ggplot(aes(x = Cluster, y = percentage * 100)) +
+  facet_rep_wrap(~ Region, repeat.tick.labels = 'bottom', ncol = 3, scales ="free") +
+
+  # Boxplots grouped by Cluster + Condition
+  stat_summary(
+    aes(group = interaction(Cluster, Condition), fill = Condition),
+    geom = "boxplot",
+    fun.data = function(x) setNames(
+      quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)),
+      c("ymin", "lower", "middle", "upper", "ymax")
+    ),
+    position = position_dodge(width = 0.9),
+    width = 0.6
+  ) +
+
+  # Dots grouped by Cluster + Condition + Sex.x
+  geom_point(
+    aes(group = interaction(Cluster, Condition), fill = Sex.x),
+    position = position_dodge(width = 0.9),
+    shape = 21,
+    size = 2,
+    alpha = 0.7,
+    stroke = 0.3
+  ) +
+
+  scale_fill_manual(values = cbPalette) +
+  scale_x_discrete(name = "Cluster") +
+  scale_y_continuous(name = "Percentage") +
+  ggtitle("K-means clusters") +
+  theme_cowplot(font_size = 15) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p
+
+dev.off()
+
+
+
+
+
+
+```
+
+
+```{r}
+#loop for each region only for PBS
+
+
+stats.input <- cp2
+
+
+#CC throws an error
+subregions <- c("CA1" ,"CA3", "DG","PFC","CP")
+
+
+  
+  
+# Initialize lists to store results
+all_anovas <- list()
+all_posthoc1 <- list()
+all_posthoc2 <- list()
+
+# Loop over each subregion
+for (region in subregions) {
+  
+  # Subset data
+  stats_sub <- stats.input[stats.input$Region == region, ]
+  
+  # Run stats model
+  stats.testing <- stats_cluster.animal(
+    stats_sub,
+    "percentage ~ Cluster*Condition*Sex.x + (1|MouseID)",  # no 'subregion' term
+    "~Condition|Cluster*Sex.x", 
+    "~Condition|Cluster", 
+    "sidak"
+  )
+  
+  # Extract and store ANOVA
+  anova <- stats.testing[[1]]
+  all_anovas[[region]] <- anova
+ # write.csv(anova, paste0("ANOVA_", region, "_kmeansclusters.csv"))
+  
+  # Extract and store posthoc1
+  posthoc1 <- stats.testing[[2]]
+  posthoc1$correction <- "sidak"
+  all_posthoc1[[region]] <- posthoc1
+ # write.csv(posthoc1, paste0("Posthoc1_", region, "_Sidak_kmeansclusters.csv"))
+  
+  # Extract and store posthoc2
+  posthoc2 <- stats.testing[[3]]
+  posthoc2$correction <- "sidak"
+  all_posthoc2[[region]] <- posthoc2
+ # write.csv(posthoc2, paste0("Posthoc2_", region, "_Sidak_kmeansclusters.csv"))
+}
+
+# Optional: combine and export all results into one table each
+combined_anova <- dplyr::bind_rows(all_anovas, .id = "Subregion")
+combined_posthoc1 <- dplyr::bind_rows(all_posthoc1, .id = "Subregion")
+combined_posthoc2 <- dplyr::bind_rows(all_posthoc2, .id = "Subregion")
+
+
+#add significance column
+combined_anova <- combined_anova  %>%
+  mutate(Significance = ifelse(`Pr(>Chisq)` < 0.05, "significant", "ns"))
+
+
+# Save combined files
+write.csv(combined_anova, "Combined_ANOVA_AllSubregions_noLPS.csv")
+write.csv(combined_posthoc1, "Combined_Posthoc1_Sidak_AllSubregions_noLPS.csv")
+write.csv(combined_posthoc2, "Combined_Posthoc2_Sidak_AllSubregions_noLPS.csv")
+
+
+
+```
+```{r}
+#graph without Butyarate only
+# Quick check of cluster proportions when considering experimental variables of interest
+
+cp2 <- clusterpercentage(pca_kmeans, "Cluster", MouseID, Region, Sex.x, Condition, Injection)
+
+
+cp2 <- cp2  %>%  mutate(Cluster = 
+                           case_when(Cluster=="1" ~ "ramified",
+                                Cluster=="2" ~ "ameboid",
+                                Cluster=="3" ~ "rod-like",
+                                Cluster=="4" ~ "hypertrophic")) %>%
+  filter(Condition == "Saline"| Condition == "Butyrate")
+
+
+cp2$Region <- factor(cp2$Region, levels= c("CA1" ,"CA3", "DG","PFC","CC" , "CP"))
+cp2$Condition <- factor(cp2$Condition, levels = c("Saline","Butyrate"))
+cp2$Injection <- factor(cp2$Injection, levels = c("PBS","LPS"))
+cp2$Sex.x <- factor(cp2$Sex.x, levels = c("M","F"))
+cp2$Group <- paste(cp2$Condition,cp2$Injection, sep= " ")
+cp2$Group <- factor(cp2$Group, levels = c("Saline PBS","Butyrate PBS","Saline LPS","Butyrate LPS"))
+
+library(lemon)
+library(cowplot)
+
+pdf("Boplot_subregion_SCFA_Sex_Cluster_butyrateonly.pdf", height =8, width =12)    # create PNG for the heat map       
+
+cbPalette <- c("#0072B2", "#009E73", "#E69F00", "#CC79A7","skyblue", "pink" )
+
+p <- cp2 %>%
+  ggplot(aes(x = Cluster, y = percentage * 100), group = Group) +
+  facet_rep_wrap(~ Region, repeat.tick.labels = 'bottom', ncol = 3, scales ="free") +
+
+  # Boxplots grouped by Cluster + Condition
+  stat_summary(
+    aes(group = interaction(Cluster, Group), fill = Group),
+    geom = "boxplot",
+    fun.data = function(x) setNames(
+      quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)),
+      c("ymin", "lower", "middle", "upper", "ymax")
+    ),
+    position = position_dodge(width = 0.9),
+    width = 0.6
+  ) +
+
+  # Dots grouped by Cluster + Condition + Sex.x
+  geom_point(
+    aes(group = interaction(Cluster, Group), fill = Sex.x),
+    position = position_dodge(width = 0.9),
+    shape = 21,
+    size = 2,
+    alpha = 0.7,
+    stroke = 0.3
+  ) +
+
+  scale_fill_manual(values = cbPalette) +
+  scale_x_discrete(name = "Cluster") +
+  scale_y_continuous(name = "Percentage") +
+  ggtitle("K-means clusters") +
+  theme_cowplot(font_size = 15) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p
+
+dev.off()
+
+
+
+
+
+
+```
+
+```{r}
+#loop for each region only for PBS
+
+
+stats.input <- cp2
+
+
+#CC throws an error
+subregions <- c("CA1" ,"CA3", "DG","PFC","CP")
+
+
+  
+  
+# Initialize lists to store results
+all_anovas <- list()
+all_posthoc1 <- list()
+all_posthoc2 <- list()
+
+# Loop over each subregion
+for (region in subregions) {
+  
+  # Subset data
+  stats_sub <- stats.input[stats.input$Region == region, ]
+  
+  # Run stats model
+  stats.testing <- stats_cluster.animal(
+    stats_sub,
+    "percentage ~ Cluster*Condition*Injection*Sex.x + (1|MouseID)",  # no 'subregion' term
+    "~Condition|Injection|Cluster*Sex.x", 
+    "~Condition|Injection|Cluster", 
+    "sidak"
+  )
+  
+  # Extract and store ANOVA
+  anova <- stats.testing[[1]]
+  all_anovas[[region]] <- anova
+ # write.csv(anova, paste0("ANOVA_", region, "_kmeansclusters.csv"))
+  
+  # Extract and store posthoc1
+  posthoc1 <- stats.testing[[2]]
+  posthoc1$correction <- "sidak"
+  all_posthoc1[[region]] <- posthoc1
+ # write.csv(posthoc1, paste0("Posthoc1_", region, "_Sidak_kmeansclusters.csv"))
+  
+  # Extract and store posthoc2
+  posthoc2 <- stats.testing[[3]]
+  posthoc2$correction <- "sidak"
+  all_posthoc2[[region]] <- posthoc2
+ # write.csv(posthoc2, paste0("Posthoc2_", region, "_Sidak_kmeansclusters.csv"))
+}
+
+# Optional: combine and export all results into one table each
+combined_anova <- dplyr::bind_rows(all_anovas, .id = "Subregion")
+combined_posthoc1 <- dplyr::bind_rows(all_posthoc1, .id = "Subregion")
+combined_posthoc2 <- dplyr::bind_rows(all_posthoc2, .id = "Subregion")
+
+
+#add significance column
+combined_anova <- combined_anova  %>%
+  mutate(Significance = ifelse(`Pr(>Chisq)` < 0.05, "significant", "ns"))
+
+
+# Save combined files
+write.csv(combined_anova, "Combined_ANOVA_AllSubregions_butyrateonly.csv")
+write.csv(combined_posthoc1, "Combined_Posthoc1_Sidak_AllSubregions_butyrateonly.csv")
+write.csv(combined_posthoc2, "Combined_Posthoc2_Sidak_AllSubregions_butyrateonly.csv")
+
+
+
+```
+
+
+
+``````{r}
+#graph without Butyarate only
+# Quick check of cluster proportions when considering experimental variables of interest
+
+cp2 <- clusterpercentage(pca_kmeans, "Cluster", MouseID, Region, Sex.x, Condition, Injection)
+
+
+cp2 <- cp2  %>%  mutate(Cluster = 
+                           case_when(Cluster=="1" ~ "ramified",
+                                Cluster=="2" ~ "ameboid",
+                                Cluster=="3" ~ "rod-like",
+                                Cluster=="4" ~ "hypertrophic")) %>%
+  filter(Condition == "Saline"| Condition == "Butyrate")
+
+cp2 <- cp2 %>% filter(Cluster=="ameboid")
+
+cp2$Region <- factor(cp2$Region, levels= c("CA1" ,"CA3", "DG","PFC","CC" , "CP"))
+cp2$Condition <- factor(cp2$Condition, levels = c("Saline","Butyrate"))
+cp2$Injection <- factor(cp2$Injection, levels = c("PBS","LPS"))
+cp2$Sex.x <- factor(cp2$Sex.x, levels = c("M","F"))
+cp2$Group <- paste(cp2$Condition,cp2$Injection, sep= " ")
+cp2$Group <- factor(cp2$Group, levels = c("Saline PBS","Butyrate PBS","Saline LPS","Butyrate LPS"))
+
+library(lemon)
+library(cowplot)
+
+pdf("Boplot_subregion_SCFA_Sex_Cluster_butyrateonly_ameboidonly.pdf", height =12, width =8)    # create PNG for the heat map       
+
+cbPalette <- c("#0072B2", "#009E73", "#E69F00", "#CC79A7","skyblue", "pink" )
+
+p <- cp2 %>%
+  ggplot(aes(x = Injection, y = percentage * 100), group = Group) +
+  facet_rep_wrap(~ Region*Sex.x, repeat.tick.labels = 'bottom', ncol = 3) +
+
+  # Boxplots grouped by Cluster + Condition
+  stat_summary(
+    aes(group = interaction(Cluster, Injection, Condition), fill = Condition),
+    geom = "boxplot",
+    fun.data = function(x) setNames(
+      quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)),
+      c("ymin", "lower", "middle", "upper", "ymax")
+    ),
+    position = position_dodge(width = 0.9),
+    width = 0.6
+  ) +
+
+  # Dots grouped by Cluster + Condition + Sex.x
+  geom_point(
+    aes(group = interaction(Cluster, Injection, Condition), fill = Sex.x),
+    position = position_dodge(width = 0.9),
+    shape = 21,
+    size = 2,
+    alpha = 0.7,
+    stroke = 0.3
+  ) +
+
+  scale_fill_manual(values = cbPalette) +
+  scale_x_discrete(name = "Cluster") +
+  scale_y_continuous(name = "Percentage") +
+  ggtitle("Ameboid Microglia") +
+  theme_cowplot(font_size = 15) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p
+
+dev.off()
+
+
+``````
+
+```{r}
+#loop for each region only for PBS
+
+
+stats.input <- cp2
+
+
+#CC throws an error
+subregions <- c("CA1" ,"CA3", "DG","PFC","CP")
+
+
+  
+  
+# Initialize lists to store results
+all_anovas <- list()
+all_posthoc1 <- list()
+all_posthoc2 <- list()
+
+# Loop over each subregion
+for (region in subregions) {
+  
+  # Subset data
+  stats_sub <- stats.input[stats.input$Region == region, ]
+  
+  # Run stats model
+  stats.testing <- stats_cluster.animal(
+    stats_sub,
+    "percentage ~ Condition*Injection*Sex.x + (1|MouseID)",  # no 'subregion' term
+    "~Condition|Injection*Sex.x", 
+    "~Condition|Injection", 
+    "sidak"
+  )
+  
+  # Extract and store ANOVA
+  anova <- stats.testing[[1]]
+  all_anovas[[region]] <- anova
+ # write.csv(anova, paste0("ANOVA_", region, "_kmeansclusters.csv"))
+  
+  # Extract and store posthoc1
+  posthoc1 <- stats.testing[[2]]
+  posthoc1$correction <- "sidak"
+  all_posthoc1[[region]] <- posthoc1
+ # write.csv(posthoc1, paste0("Posthoc1_", region, "_Sidak_kmeansclusters.csv"))
+  
+  # Extract and store posthoc2
+  posthoc2 <- stats.testing[[3]]
+  posthoc2$correction <- "sidak"
+  all_posthoc2[[region]] <- posthoc2
+ # write.csv(posthoc2, paste0("Posthoc2_", region, "_Sidak_kmeansclusters.csv"))
+}
+
+# Optional: combine and export all results into one table each
+combined_anova <- dplyr::bind_rows(all_anovas, .id = "Subregion")
+combined_posthoc1 <- dplyr::bind_rows(all_posthoc1, .id = "Subregion")
+combined_posthoc2 <- dplyr::bind_rows(all_posthoc2, .id = "Subregion")
+
+
+#add significance column
+combined_anova <- combined_anova  %>%
+  mutate(Significance = ifelse(`Pr(>Chisq)` < 0.05, "significant", "ns"))
+
+
+# Save combined files
+write.csv(combined_anova, "Combined_ANOVA_AllSubregions_butyrateonly_ameboidonly.csv")
+write.csv(combined_posthoc1, "Combined_Posthoc1_Sidak_AllSubregions_butyrateonly_ameboidonly.csv")
+write.csv(combined_posthoc2, "Combined_Posthoc2_Sidak_AllSubregions_butyrateonly_ameboidonly.csv")
+
+
+
+```
+
+

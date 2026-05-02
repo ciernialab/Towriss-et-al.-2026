@@ -1,0 +1,344 @@
+---
+title: "sickness behaviour analysis"
+author: "Annie Ciernia"
+date: "Jan 2025"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Setup for notebook chunks
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "")
+getwd()
+setwd("/Users/aciernia/Sync/CierniaLabMembers/AnnieCiernia/Experiments/SCFA_Invivo2025/sickness")
+
+
+```
+
+
+http://depts.washington.edu/acelab/proj/art/index.html
+The Aligned Rank Transform (ART) is covered in Prof. Wobbrock's Coursera course on practical statistics. See the course video that covers this procedure.
+
+Purpose of the Aligned Rank Transform (ART)
+
+Classic nonparametric statistical tests—the Kruskal-Wallis test, Mann-Whitney U test, Friedman test, or Wilcoxon signed-rank test—all are one-way tests, permitting the analysis of only a single factor at a time. As a result, multi-factor designs cannot be analyzed with these straightforward rank-based tests. Furthermore, the simple rank transform procedure (RT) of Conover and Iman (1981), which uses an ANOVA on midranks, is reasonable for main effects but causes inflated Type I errors for interaction effects (Salter & Fawcett 1993; Higgins & Tashtoush 1994). Thus, something besides a simple RT procedure is necessary if we are to analyze multiple factors nonparametrically.
+
+But wait—isn't there a nonparametric equivalent to the factorial ANOVA? Surely there must be! Surprisingly, there is no real consensus on such an analysis. Although there has been work by researchers on nonparametric factorial analyses, the resultant methods remain relatively obscure. For a review of some methods, see, e.g., Sawilowsky (1990).
+
+To illustrate the point, consider this table of analyses from U.C.L.A.; you will see that no entry is given for two or more independent variables with dependent groups (i.e., repeated measures). A parametric analysis would be, of course, the repeated measures ANOVA, but an equivalent nonparametric analysis is not provided.
+
+The Aligned Rank Transform (ART) procedure was devised to fill this gap (Fawcett & Salter 1984; Higgins et al. 1990; Higgins & Tashtoush 1994; Salter & Fawcett 1985; Salter & Fawcett 1995). For each possible main effect or interaction, all responses (Y) are first "aligned" (Hodges & Lehmann 1962), a process that strips from Y all effects but the one for which the alignment is being carried out. Let an aligned response be Yaligned. The aligned response Yaligned is then assigned midranks; let this ranked response be Yart.
+
+Then a factorial ANOVA can be run on Yart, the aligned-and-ranked responses; vitally, unlike when using the regular rank transform (RT), using an aligned rank transform (ART) ensures that main effects and interactions have appropriate Type I error rates and suitable power.
+
+So why ARTool (Wobbrock et al. 2011)? ARTool creates, for each possible main effect or interaction, one new aligned column (Yaligned) and one new ranked column (Yart). (Doing so by hand would be extremely tedious and error-prone.) In general, for N factors, ARTool produces 2N-1 aligned columns and 2N-1 ranked columns. You can then analyze the Yart responses with your favorite statistics software.
+
+If you use the [R] version of ARTool, things are somewhat streamlined. The art() function performs all of the alignment and ranking that Windows ARTool does, but also runs multiple ANOVAs for you behind the scenes—plucking the appropriate result from each ANOVA—and assembling one final output table for you. Similarly, the art.con() function, which runs the ART-C procedure, also performs the alignment and ranking steps like Windows ARTool does, but additionally runs all requested pairwise comparisons, applying any indicated adjustment (e.g., "tukey", "holm", "bonferroni", "none", etc.). Below, we offer sample code for using ARTool in [R].
+
+
+
+Load in all libraries
+```{r}
+## Load in all libraries
+
+library(cowplot)
+library(stringr)
+library(ggplot2)
+library(tidyverse)
+library(plotrix)
+library(rstatix)
+library(ggpubr)
+library(nlme)
+library(emmeans)
+library(ARTool)
+
+```
+
+Load in sickeness behaviour: 3hrs
+```{r}
+
+data <- read.csv("scfa1-4-master.csv")
+
+#calculate sickness score:
+data$Piloerection <- as.numeric(data$Piloerection)
+data$Ptosis <- as.numeric(data$Ptosis)
+
+data$Lethargy <- as.numeric(data$Lethargy)
+
+data$sickness.score <- data$Piloerection + data$Ptosis + data$Lethargy
+
+#select
+data2 <- data %>% select(Animal, Sex, Cohort, LPS.Treatment,Condition, sickness.score)
+
+#define factors
+data2$Diet <- data2$Condition
+
+
+data2$Sex <- as.factor(data2$Sex)
+
+data2$Diet <- gsub("saline","Saline",data2$Diet)
+data2$Diet <- gsub("butyrate","Butyrate",data2$Diet)
+data2$Diet <- gsub("propionate","Propionate",data2$Diet)
+data2$Diet <- gsub("acetate","Acetate",data2$Diet)
+
+
+data2$Diet <- factor(data2$Diet, levels = c("Saline"  ,   "Butyrate"  , "Propionate", "Acetate"))
+data2$LPS.Treatment <- factor(data2$LPS.Treatment, levels = c("PBS","LPS"))
+
+
+data2$sickness.score <- as.numeric(data2$sickness.score )
+
+
+#mice per condition
+t <- table(data2$Diet, data2$LPS.Treatment, data2$Sex)
+
+write.csv(t, "Animals_per_group.csv")
+
+```
+
+
+
+```{r}
+#   # identify any outliers and remove
+# outliers <- data2 %>% 
+#   group_by(Diet, LPS.Treatment, Sex) %>%
+#   identify_outliers(sickness.score)
+# 
+# #remove outliers
+# #remove outliers: 
+# data_clean <- data2[!(data2$Animal %in% outliers$Animal),]
+# 
+# write.csv(data_clean,"OutlierCleanedsicknessscores_3hr.csv")
+# 
+
+
+```
+
+
+m = art(Y ~ X1 * X2 * X3 + (1|S), data=df) # linear mixed model syntax; see lme4::lmer
+		anova(m)
+
+
+```{r}
+
+model <- art(sickness.score ~ Sex * LPS.Treatment * Diet, data = data2) 
+          # won't run with missing LPSTreatment groups 
+          # nlme
+          
+          anova = anova(model)
+          anova = as.data.frame(anova)
+          anova = anova[-1,] #remove intercept
+          anova
+          
+          write.csv(anova,"ANOVA_SickenssBehavivour_ART_3hr.csv")
+          
+            
+           
+          #posthocs 
+         posthoc <- art.con(model, ~ Sex * LPS.Treatment * Diet, adjust = "none")
+        
+        # 2. Turn into table
+        posthoc_table <- as.data.frame(posthoc)
+        
+        
+        posthoc_parsed <- posthoc_table %>%
+  separate(contrast, into = c("term1", "term2"), sep = " - ") %>%
+  separate(term1, into = c("Sex1", "Treatment1", "Diet1"), sep = ",") %>%
+  separate(term2, into = c("Sex2", "Treatment2", "Diet2"), sep = ",")
+
+
+
+        # Step 3: Filter only the comparisons you want
+      # comparing LPS vs PBS within each diet
+      filtered_table1 <- posthoc_parsed %>%
+        filter((grepl("LPS", Treatment1) & grepl("PBS", Treatment2)) | (grepl("PBS", Treatment1) & grepl("LPS", Treatment2))) %>%
+       filter(Sex1 == Sex2) %>%
+        filter(Diet1 == Diet2)
+      
+      #within LPS condition, compare across diet
+      filtered_table2 <- posthoc_parsed %>%
+       filter(Sex1 == Sex2) %>%
+        filter(Treatment1 == Treatment2) %>%
+        filter(Diet1 != Diet2)
+      
+      #combine
+      filtered_table <- rbind(filtered_table1,filtered_table2)
+      
+    # Then correct the p-values
+posthoc_filtered <- filtered_table %>%
+  mutate(p.value.adjusted = p.adjust(p.value, method = "holm"))
+        
+        
+        write.csv(posthoc_filtered,"ART.posthoc.csv")
+        
+        
+                
+```
+
+
+
+
+
+```{r}
+#plot
+library(lemon)
+pdf("Boplot_Sickness_Genotype_LPS_Sex_3hr.pdf", height = 5, width =6)    # create PNG for the heat map       
+
+cbPalette <- c( "#0072B2",	"#E69F00","#009E73","#CC79A7","purple")
+
+p <- ggplot(data2, aes(x = LPS.Treatment, y = sickness.score)) +
+  facet_grid(~ Sex) +
+  stat_summary(
+    aes(fill = Diet, group = interaction(Diet, LPS.Treatment)),
+    geom = "boxplot",
+    fun.data = function(x) setNames(
+      quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)),
+      c("ymin", "lower", "middle", "upper", "ymax")
+    ),
+    position = position_dodge(width = 0.9)
+  ) +
+  geom_jitter(
+  aes(fill = Diet, group = interaction(Diet, LPS.Treatment)),
+  position = position_jitterdodge(
+    jitter.width = 0.4,
+    jitter.height = 0.02,   # <-- add vertical jitter
+    dodge.width = 0.9,
+    seed = 123
+  ),
+  shape = 21,
+  color = "black",
+  size = 2,
+  alpha = 0.5
+) +
+  scale_fill_manual(values = cbPalette) +
+  theme_cowplot(font_size = 15) +
+  scale_x_discrete(name = "LPS Treatment") +
+  scale_y_continuous(name = "Sickness Score") +
+  theme(
+    panel.background = element_rect(fill = "white", color = NA),
+    strip.background = element_rect(fill = "white", color = "black"),
+    axis.text.x.bottom = element_text(),
+    axis.title.x.bottom = element_text()
+  )
+
+print(p)
+
+dev.off()
+
+
+
+
+```
+
+
+```{r}
+#plot butyrate only
+
+
+buty <- data2 %>% filter(Diet == "Butyrate" |Diet == "Saline" )
+
+pdf("Boplot_Sickness_butyrate_LPS_Sex_3hr.pdf", height = 5, width =6)    # create PNG for the heat map       
+
+cbPalette <- c( "#0072B2",	"#E69F00","#009E73","#CC79A7","purple")
+
+p <- ggplot(buty, aes(x = LPS.Treatment, y = sickness.score)) +
+  facet_grid(~ Sex) +
+  stat_summary(
+    aes(fill = Diet, group = interaction(Diet, LPS.Treatment)),
+    geom = "boxplot",
+    fun.data = function(x) setNames(
+      quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)),
+      c("ymin", "lower", "middle", "upper", "ymax")
+    ),
+    position = position_dodge(width = 0.9)
+  ) +
+  geom_jitter(
+    aes(fill = Diet, group = interaction(Diet, LPS.Treatment)),
+    position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.9),
+    shape = 21,
+    color = "black",
+    size = 2,
+    alpha = 0.5
+  ) +
+  scale_fill_manual(values = cbPalette) +
+  theme_cowplot(font_size = 15) +
+  scale_x_discrete(name = "LPS Treatment") +
+  scale_y_continuous(name = "Sickness Score", limits = c(0, 1.5)) +
+  theme(
+    panel.background = element_rect(fill = "white", color = NA),
+    strip.background = element_rect(fill = "white", color = "black"),
+    axis.text.x.bottom = element_text(),
+    axis.title.x.bottom = element_text()
+  )
+
+print(p)
+
+dev.off()
+
+
+
+```
+
+
+
+butyrate only
+```{r}
+
+model <- art(sickness.score ~ Sex * LPS.Treatment * Diet, data = buty) 
+          # won't run with missing LPSTreatment groups 
+          # nlme
+          
+          anova = anova(model)
+          anova = as.data.frame(anova)
+          anova = anova[-1,] #remove intercept
+          anova
+          
+          write.csv(anova,"ANOVA_butyrate_SickenssBehavivour_ART_3hr.csv")
+          
+            
+           
+          #posthocs 
+         posthoc <- art.con(model, ~ Sex * LPS.Treatment * Diet, adjust = "none")
+        
+        # 2. Turn into table
+        posthoc_table <- as.data.frame(posthoc)
+        
+        
+        posthoc_parsed <- posthoc_table %>%
+  separate(contrast, into = c("term1", "term2"), sep = " - ") %>%
+  separate(term1, into = c("Sex1", "Treatment1", "Diet1"), sep = ",") %>%
+  separate(term2, into = c("Sex2", "Treatment2", "Diet2"), sep = ",")
+
+
+
+        # Step 3: Filter only the comparisons you want
+      # comparing LPS vs PBS within each diet
+      filtered_table1 <- posthoc_parsed %>%
+        filter((grepl("LPS", Treatment1) & grepl("PBS", Treatment2)) | (grepl("PBS", Treatment1) & grepl("LPS", Treatment2))) %>%
+       filter(Sex1 == Sex2) %>%
+        filter(Diet1 == Diet2)
+      
+      #within LPS condition, compare across diet
+      filtered_table2 <- posthoc_parsed %>%
+       filter(Sex1 == Sex2) %>%
+        filter(Treatment1 == Treatment2) %>%
+        filter(Diet1 != Diet2)
+      
+      #combine
+      filtered_table <- rbind(filtered_table1,filtered_table2)
+      
+    # Then correct the p-values
+posthoc_filtered <- filtered_table %>%
+  mutate(p.value.adjusted = p.adjust(p.value, method = "holm"))
+        
+        
+        write.csv(posthoc_filtered,"ART.posthoc.butyrate.csv")
+        
+        
+                
+```
+
+
