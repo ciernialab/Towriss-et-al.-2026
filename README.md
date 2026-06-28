@@ -1,4 +1,4 @@
-# Dang-et-al.-2026
+# Towriss-et-al.-2026
 SCFA analysis for manuscript
 
 R code for the following analysis:
